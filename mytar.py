@@ -48,26 +48,58 @@ class BufferedFdWriter:
         os.close(self.fd)
 
 
-def bufferedCopy(byteReader, byteWriter):
-    while (bv := byteReader.readByte()) is not None:
-        byteWriter.writeByte(bv)
-    byteWriter.flush()
+class Framer:
+    def __init__(self, writer):
+        self.writer = writer
+    def insByte(self, val):
+        if val == ord('|'):
+            self.writer.writeByte(val)
+        self.writer.writeByte(val)
+    def insBytearray(self, barray):
+        for val in barray:
+            self.insByte(val)
+    def terminate(self):
+        self.writer.writeByte(ord('|'))
+        self.writer.writeByte(ord('e'))
+        self.writer.flush()
+
+
+class Deframer:
+    def __init__(self, reader):
+        self.reader = reader
+    def setWriter(self, writer):
+        self.writer = writer
+    def checkByte(self, val):
+        if val == ord('|'):
+            nextval = self.reader.readByte()
+            if nextval == ord('e'):
+                return False
+        return True
+    def insByte(self, val):
+        self.writer.writeByte(val)
+    def endFile(self):
+        self.writer.flush()
+        self.writer.close()
 
 
 def createFile(file_name):
+    # Create the file path
     file_path = os.path.join(os.getcwd() + "/tar", file_name)
+    # Check if the file exists, if it does delete it, create it
     if os.path.isfile(file_path):
         os.remove(file_path)
         os.mknod(file_path)
     else:
         os.mknod(file_path)
+    # Open the file and return the file descriptor 
     file_fd = os.open(file_path, os.O_RDWR)
     return file_fd
 
 
 def encodetofile(files):
     # Initialize the Writer 
-    en = BufferedFdWriter(1)
+    br = BufferedFdWriter(1)
+    framer = Framer(br)
     
     for f in files:
         # Open the files
@@ -76,38 +108,21 @@ def encodetofile(files):
 
         # initialize reader
         fd = BufferedFdReader(file_fd)
-        
-        # Write file name
-        for i in f:
-            i = i.encode()
-            print(i)
-            if i == b'|':
-                en.writeByte(i)
-            en.writeByte(i)
-        
-        # Write terminator
-        en.writeByte('|'.encode())
-        en.writeByte('e'.encode())
+        f = f.encode()
+        framer.insBytearray(f)
+        framer.terminate()
 
         # Read the file and write to the buffer 
-        ibuf = fd.readByte()
-        while ibuf != None:
-            # Replace terminators with duplicates
-            if ibuf == b'|':
-                en.writeByte(ibuf)
-            en.writeByte(ibuf)
-            ibuf = fd.readByte()
-
-        # Write file terminator
-        en.writeByte('|')
-        en.writeByte('e')
-
+        while ((bval := fd.readByte()) != None):
+            framer.insByte(bval)
+        framer.terminate()
+                
         # close the file 
         fd.close()
 
     # close the writer and print done 
-    print("Files successfully encoded\n")
-    en.close()
+    print("\nFiles successfully encoded\n")
+    br.close()
 
 
 def decodefromfile(tar_file):
@@ -115,29 +130,26 @@ def decodefromfile(tar_file):
     tar_path = os.path.join(os.getcwd() + "/tar", tar_file)
     tar_fd = os.open(tar_path, os.O_RDONLY)
     tar = BufferedFdReader(tar_fd)
+    deframer = Deframer(tar)
 
     is_name = 1
     file_name = b''
 
-    # Read from the tar 
-    ibuf = tar.readByte()
-    while ibuf != None:
-        if ibuf == b'|':
-            ibuf = tar.readByte()
-            if ibuf == b'e':
-                if is_name:
-                    temp = createFile(file_name)
-                    is_name = 1 - is_name
-                    fd = BufferedFdWriter(temp)
-                    ibuf = tar.readByte()
-                else:
-                    fd.close()
-                    is_name = 1 - is_name
-                    ibuf = tar.readByte()
-        if is_name:
-            file_name += ibuf
-        else:
-            fd.writeByte(ibuf)
+    # Read from the tar
+    while ((bval := tar.readByte()) != None):
+        check = deframer.checkByte(bval)
+        if not check and is_name:
+            fd = creatFile(filename)
+            deframer.setWriter(fd)
+            is_name = 0
+            filename = b''
+        elif not check and not is_name:
+            deframer.endFile()
+            is_name = 1
+        elif check and is_name:
+            file_name += bval
+        elif check and not is_name:
+            deframer.insByte(bval)
 
     print("Files successfully decoded\n")
     tar.close()
