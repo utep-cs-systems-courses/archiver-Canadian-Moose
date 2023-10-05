@@ -133,25 +133,26 @@ def decodefromfile(tar_file):
     deframer = Deframer(tar)
 
     is_name = 1
-    file_name = b''
+    filename = ''
 
     # Read from the tar
     while ((bval := tar.readByte()) != None):
         check = deframer.checkByte(bval)
         if not check and is_name:
-            fd = creatFile(filename)
-            deframer.setWriter(fd)
+            fd = createFile(filename)
+            out = BufferedFdWriter(fd)
+            deframer.setWriter(out)
             is_name = 0
-            filename = b''
+            filename = ''
         elif not check and not is_name:
             deframer.endFile()
             is_name = 1
         elif check and is_name:
-            file_name += bval
+            filename += chr(bval)
         elif check and not is_name:
             deframer.insByte(bval)
 
-    print("Files successfully decoded\n")
+    print("\nFiles successfully decoded\n")
     tar.close()
 
 
