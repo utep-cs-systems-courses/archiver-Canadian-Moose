@@ -1,86 +1,158 @@
-#! usr/bin/env python3
-
+#! /usr/bin/env python3
 import os
 import re
 import sys
 
 
-def encodetofile(files, tar_file):
-    # create the directory 
-    path = os.getcwd() + "/tar"
-    if not os.path.exists(path):
-        os.makedirs(path)
-    
-    # open the tar_file for storing
-    tar_path = os.path.join(os.getcwd() + "/tar", tar_file)
+class BufferedFdReader:
+    def __init__(self, fd, bufLen = 1024*16):
+        self.fd = fd
+        self.buf = b""
+        self.index = 0
+        self.bufLen = bufLen
+    def readByte(self):
+        if self.index >= len(self.buf):
+            self.buf = os.read(self.fd, self.bufLen)
+            self.index = 0
+        if len(self.buf) == 0:
+            return None
+        else:
+            retval = self.buf[self.index]
+            self.index += 1
+            return retval
+    def close(self):
+        os.close(self.fd)
 
-    if os.path.isfile(tar_path):
-        os.remove(tar_path)
-        os.mknod(tar_path)
+
+class BufferedFdWriter:
+    def __init__(self, fd, bufLen = 1024*16):
+        self.fd = fd
+        self.buf = bytearray(bufLen)
+        self.index = 0
+    def writeByte(self, bVal):
+        self.buf[self.index] = bVal
+        self.index += 1
+        if self.index >= len(self.buf):
+            self.flush()
+    def flush(self):
+        startIndex, endIndex = 0, self.index
+        while startIndex < endIndex:
+            nWritten = os.write(self.fd, self.buf[startIndex:endIndex])
+            if nWritten == 0:
+                os.write(2,f"buf.BufferedFdWriter(fd={self.fd}): flush failed\n".encode())
+                sys.exit(1)
+            startIndex += nWritten
+        self.index = 0
+    def close(self):
+        self.flush()
+        os.close(self.fd)
+
+
+def bufferedCopy(byteReader, byteWriter):
+    while (bv := byteReader.readByte()) is not None:
+        byteWriter.writeByte(bv)
+    byteWriter.flush()
+
+
+def createFile(file_name):
+    file_path = os.path.join(os.getcwd() + "/tar", file_name)
+    if os.path.isfile(file_path):
+        os.remove(file_path)
+        os.mknod(file_path)
     else:
-        os.mknod(tar_path)
-    
-    tar_fd = os.open(tar_path, os.O_RDWR)
+        os.mknod(file_path)
+    file_fd = os.open(file_path, os.O_RDWR)
+    return file_fd
+
+
+def encodetofile(files):
+    # Initialize the Writer 
+    en = BufferedFdWriter(1)
     
     for f in files:
         # Open the files
         file_path = os.path.join(os.getcwd() + "/src", f)
         file_fd = os.open(file_path, os.O_RDONLY)
-        file_size = os.path.getsize(tar_path)
 
-        # Read file into a buffer and write to tar_file 
-        ibuf = os.read(file_fd, file_size)
-        os.write(tar_fd, ibuf)
+        # initialize reader
+        fd = BufferedFdReader(file_fd)
+        
+        # Write file name
+        for i in f:
+            i = i.encode()
+            print(i)
+            if i == b'|':
+                en.writeByte(i)
+            en.writeByte(i)
+        
+        # Write terminator
+        en.writeByte('|'.encode())
+        en.writeByte('e'.encode())
 
-        # write file to the tar file 
-        os.write(tar_fd, ("|" + f + "|").encode('latin-1'))
+        # Read the file and write to the buffer 
+        ibuf = fd.readByte()
+        while ibuf != None:
+            # Replace terminators with duplicates
+            if ibuf == b'|':
+                en.writeByte(ibuf)
+            en.writeByte(ibuf)
+            ibuf = fd.readByte()
+
+        # Write file terminator
+        en.writeByte('|')
+        en.writeByte('e')
 
         # close the file 
-        os.close(file_fd)
-    
-    # close tar
-    os.close(tar_fd)
-    sys.stdout.write("Files successfully encoded\n")
+        fd.close()
+
+    # close the writer and print done 
+    print("Files successfully encoded\n")
+    en.close()
 
 
 def decodefromfile(tar_file):
-    # open the tar file
+    # initialize the reader
     tar_path = os.path.join(os.getcwd() + "/tar", tar_file)
     tar_fd = os.open(tar_path, os.O_RDONLY)
-    file_size = os.path.getsize(tar_path)
-    
-    # read the file content
-    file_content = os.read(tar_fd, file_size).decode('latin-1')
-    file_content = file_content.split("|")
+    tar = BufferedFdReader(tar_fd)
 
-    i = 0
-    while i < len(file_content)-1:
-        file_path = os.path.join(os.getcwd() + "/tar", file_content[i+1])
-        if os.path.isfile(file_path):
-            os.remove(file_path)
-            os.mknod(file_path)
+    is_name = 1
+    file_name = b''
+
+    # Read from the tar 
+    ibuf = tar.readByte()
+    while ibuf != None:
+        if ibuf == b'|':
+            ibuf = tar.readByte()
+            if ibuf == b'e':
+                if is_name:
+                    temp = createFile(file_name)
+                    is_name = 1 - is_name
+                    fd = BufferedFdWriter(temp)
+                    ibuf = tar.readByte()
+                else:
+                    fd.close()
+                    is_name = 1 - is_name
+                    ibuf = tar.readByte()
+        if is_name:
+            file_name += ibuf
         else:
-            os.mknod(file_path)
-        file_fd = os.open(file_path, os.O_RDWR)
-        os.write(file_fd, bytes(file_content[i], 'latin-1'))
-        os.close(file_fd)
-        i += 2
-    
-    # print out the file contents
-    os.close(tar_fd)
-    sys.stdout.write("Files successfully decoded\n")
+            fd.writeByte(ibuf)
+
+    print("Files successfully decoded\n")
+    tar.close()
 
 
 command = sys.argv[1]
-tar_file = sys.argv[-1]
     
 if command == "c":
-    files = sys.argv[2:-1]
-    encodetofile(files, tar_file)
+    files = sys.argv[2:]
+    encodetofile(files)
 
 elif command == "x":
+    tar_file = sys.argv[2]
     decodefromfile(tar_file)
 
 else:
-    sys.stdout.write("Usage: mytar.py c|x <file1> <file2> ... <fileN> <tarFile>\n")
+    sys.stdout.write("Usage: mytar.py c|x <file1> <file2> ... <fileN>\n")
     sys.exit(1)
