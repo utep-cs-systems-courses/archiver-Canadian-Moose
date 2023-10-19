@@ -67,19 +67,24 @@ class Framer:
 class Deframer:
     def __init__(self, reader):
         self.reader = reader
-    def setWriter(self, writer):
-        self.writer = writer
     def checkByte(self, val):
         if val == ord('|'):
             nextval = self.reader.readByte()
             if nextval == ord('e'):
                 return False
         return True
-    def insByte(self, val):
-        self.writer.writeByte(val)
-    def endFile(self):
-        self.writer.flush()
-        self.writer.close()
+    def readByteArray(self):
+        content = ''
+        
+        while((bval := self.reader.readByte()) != None):
+            term = self.checkByte(bval)
+            
+            if term:
+                content += chr(bval)
+            if not term:
+                return content
+            
+        return None
 
 
 def createFile(file_name):
@@ -120,9 +125,9 @@ def encodetofile(files):
         # close the file 
         fd.close()
 
-    # close the writer and print done 
-    print("\nFiles successfully encoded\n")
-    br.close()
+    # flush the writer
+    # cannot close stdout 
+    br.flush()
 
 
 def decodefromfile(tar_file):
@@ -132,27 +137,22 @@ def decodefromfile(tar_file):
     tar = BufferedFdReader(tar_fd)
     deframer = Deframer(tar)
 
-    is_name = 1
-    filename = ''
+    content = ''
+    is_file = 1
 
     # Read from the tar
-    while ((bval := tar.readByte()) != None):
-        check = deframer.checkByte(bval)
-        if not check and is_name:
-            fd = createFile(filename)
+    while ((content := deframer.readByteArray()) != None):
+        if is_file:
+            print(f'Filename: ', content)
+            fd = createFile(content)
             out = BufferedFdWriter(fd)
-            deframer.setWriter(out)
-            is_name = 0
-            filename = ''
-        elif not check and not is_name:
-            deframer.endFile()
-            is_name = 1
-        elif check and is_name:
-            filename += chr(bval)
-        elif check and not is_name:
-            deframer.insByte(bval)
+        if not is_file:
+            for bval in content: 
+                out.writeByte(ord(bval))
+            out.close()
+        is_file = 1 - is_file
+        content = ''
 
-    print("\nFiles successfully decoded\n")
     tar.close()
 
 
